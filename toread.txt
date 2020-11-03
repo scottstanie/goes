@@ -1,0 +1,8 @@
+https://makersportal.com/blog/2019/7/17/satellite-imagery-analysis-in-python-part-iii-land-surface-temperature-and-the-national-land-cover-database-nlcd#goes_nlcd
+https://github.com/blaylockbk/pyBKB_v2/tree/master/BB_GOES16
+https://docs.opendata.aws/noaa-goes16/cics-readme.html
+https://github.com/dpilger26/GOES/blob/master/scripts/DownloadData.py
+https://docs.opendata.aws/noaa-goes16/cics-readme.html
+https://unidata.github.io/python-gallery/examples/mapping_GOES16_TrueColor.html
+https://www.goes-r.gov/products/baseline-legacy-vert-moisture-profile.html
+https://www.goes-r.gov/mission/ABI-bands-quick-info.html
