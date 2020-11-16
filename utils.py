@@ -123,13 +123,15 @@ def parse_goes_filename(fname):
     return match_dict
 
 
-def subset_and_plot(fname, dset="Rad", bounds=(-105, 30, -101, 33)):
+def subset_and_plot(fname, dset="Rad", proj="latlon", bounds=(-105, 30, -101, 33)):
     # TODO: is warped vrt any better?
     left, bot, right, top = bounds
+    if proj == "latlon":
+        proj_str = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+    elif proj == "utm":
+        proj_str = "+proj=utm +datum=WGS84 +zone=13"
     with rioxarray.open_rasterio(fname) as src:
-        xds_lonlat = src.rio.reproject(
-            "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
-        )
+        xds_lonlat = src.rio.reproject(proj_str)
         subset_ds = xds_lonlat[dset][0].sel(x=slice(left, right), y=slice(top, bot))
         subset_ds.plot.imshow()
         return subset_ds
