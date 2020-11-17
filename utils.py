@@ -41,15 +41,19 @@ Possible layers to use:
 
 
 PRODUCT2 = "ABI-L2-MCMIPC"
-PRODUCT1 = "ABI-L1b-Rad"
+PRODUCT1 = "ABI-L1b-RadC"
 PLATFORM = "goes16"
 BUCKET = f"noaa-{PLATFORM}"
 
 
-def form_s3_search(dt, product=PRODUCT1, platform=PLATFORM):
-    year_doy_hour = dt.strftime("%Y/%j/%H")
+def form_s3_search(dt, product=PRODUCT1, platform=PLATFORM, use_hour=True):
+
+    if use_hour:
+        year_doy_hour = dt.strftime("%Y/%j/%H")
+    else:
+        year_doy_hour = dt.strftime("%Y/%j")
     # start_search = dt.strftime("%Y%j%H%m")
-    start_search = dt.strftime("%Y%j%H")
+    # start_search = dt.strftime("%Y%j%H")
 
     # example:
     # //noaa-goes16/ABI-L1b-RadC/2000/001/12/OR_ABI-L1b-RadC-M3C01_G16_s20000011200000_e20000011200000_c20170671748180.nc
@@ -63,11 +67,17 @@ def form_s3_search(dt, product=PRODUCT1, platform=PLATFORM):
 
 
 def search_s3(
-    search_prefix=None, dt=None, s3=None, product=PRODUCT1, platform=PLATFORM
+    search_prefix=None,
+    dt=None,
+    s3=None,
+    product=PRODUCT1,
+    platform=PLATFORM,
+    channel=None,
 ):
     if search_prefix is None:
         search_prefix = form_s3_search(dt, product=product, platform=platform)
     # Connect to s3 via boto
+    print("Searching:", search_prefix)
 
     if s3 is None:
         s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
@@ -78,7 +88,14 @@ def search_s3(
         Bucket=BUCKET,
         Prefix=search_prefix,
     )
-    return [obj for page in page_iterator for obj in page.get("Contents", [])]
+    results = [obj for page in page_iterator for obj in page.get("Contents", [])]
+    print(f"Found {len(results)} results")
+    if channel:
+        channel_str = f"C{channel:02d}"
+        results = [r for r in results if channel_str in r["Key"]]
+        print(f"Found {len(results)} results for channel {channel_str} ")
+    else:
+        return results
 
 
 """Results:
@@ -92,21 +109,31 @@ def search_s3(
    ..."""
 
 
-def download_nearest(dt, product=PRODUCT1, **kwargs):
-    s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
-    results = search_s3(dt=dt, s3=s3, product=product)
-    print(f"Found {len(results)} results")
+def get_timediffs(dt, results):
     keys = [r["Key"] for r in results]
     start_times = [parse_goes_filename(f.split("/")[-1])["start_time"] for f in keys]
-    time_diffs = [dt - s for s in start_times]
-    min_dt, min_key = min(zip(time_diffs, keys), key=lambda x: x[0].total_seconds())
+    time_diffs = [(dt - s).total_seconds() for s in start_times]
+    return time_diffs, keys
+
+
+def download_nearest(dt, product=PRODUCT1, channel=1, **kwargs):
+    s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
+    results = search_s3(dt=dt, s3=s3, product=product, channel=channel)
+    time_diffs, keys = get_timediffs(dt, results)
+    min_dt, min_key = min(zip(time_diffs, keys), key=lambda x: abs(x[0]))
     fname = min_key.split("/")[-1]
+    print(f"Downloading {fname}")
     s3.download_file(
         BUCKET,
         Key=min_key,
         Filename=fname,
     )
     return fname, min_key, min_dt
+
+
+"""TODO
+warp_subset( 'NETCDF:OR_ABI-L1b-RadC-M6C02_G16_s20200600056143_e20200600058516_c20200600058546.nc:Rad', 'test2020229_rad2.tif', bounds=(-104.33, 31.6, -103.7, 31.9))
+    """
 
 
 """
