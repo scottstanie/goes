@@ -14,7 +14,9 @@ from botocore import UNSIGNED
 from botocore.config import Config
 
 """
+https://docs.opendata.aws/noaa-goes16/cics-readme.html
 Possible layers to use:
+    ABI-L1b-RadC - Advanced Baseline Imager Level 1b CONUS
 
     ABI-L2-CMIPC - Advanced Baseline Imager Level 2 Cloud and Moisture Imagery CONUS
     ABI-L2-CTPC - Advanced Baseline Imager Level 2 Cloud Top Pressure CONUS
@@ -30,6 +32,7 @@ Possible layers to use:
     ABI-L2-CPSC - Advanced Baseline Imager Level 2 Cloud Particle Size CONUS
     ABI-L2-LSTC - Advanced Baseline Imager Level 2 Land Surface Temperature CONUS
 
+    ABI-L1b-RadF - Advanced Baseline Imager Level 1b Full Disk
 """
 
 # $ aws s3 ls s3://noaa-goes16/ABI-L1b-RadC/2019/204/10/  --no-sign-request |head
@@ -37,7 +40,13 @@ Possible layers to use:
 # 2019-07-23 05:09:32  OR_ABI-L1b-RadC-M6C01_G16_s20192041006395_e20192041009167_c20192041009214.nc
 
 
-def form_s3_search(dt, product="ABI-L2-MCMIPC", platform="goes16"):
+PRODUCT2 = "ABI-L2-MCMIPC"
+PRODUCT1 = "ABI-L1b-Rad"
+PLATFORM = "goes16"
+BUCKET = f"noaa-{PLATFORM}"
+
+
+def form_s3_search(dt, product=PRODUCT1, platform=PLATFORM):
     year_doy_hour = dt.strftime("%Y/%j/%H")
     # start_search = dt.strftime("%Y%j%H%m")
     start_search = dt.strftime("%Y%j%H")
@@ -53,18 +62,51 @@ def form_s3_search(dt, product="ABI-L2-MCMIPC", platform="goes16"):
     return prefix
 
 
-def search_s3(search_prefix, platform="goes16"):
+def search_s3(
+    search_prefix=None, dt=None, s3=None, product=PRODUCT1, platform=PLATFORM
+):
+    if search_prefix is None:
+        search_prefix = form_s3_search(dt, product=product, platform=platform)
     # Connect to s3 via boto
-    bucket = f"noaa-{platform}"
 
-    s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
+    if s3 is None:
+        s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
 
+    # bucket = f"noaa-{platform}"
     paginator = s3.get_paginator("list_objects")
     page_iterator = paginator.paginate(
-        Bucket=bucket,
+        Bucket=BUCKET,
         Prefix=search_prefix,
     )
-    return [obj for page in page_iterator for obj in page["Contents"]]
+    return [obj for page in page_iterator for obj in page.get("Contents", [])]
+
+
+"""Results:
+[{'Key': 'ABI-L2-MCMIPC/2020/180/00/OR_ABI-L2-MCMIPC-M6_G16_s20201800001177_e20201800003550_c20201800004102.nc',
+  'LastModified': datetime.datetime(2020, 6, 28, 0, 26, 47, tzinfo=tzutc()),
+  'ETag': '"2bc5d3470875d03b490c2b6e3a491be9-8"',
+  'Size': 62795922,
+  'StorageClass': 'INTELLIGENT_TIERING',
+  'Owner': {'DisplayName': 'sandbox',
+   'ID': '07cd0b2bd0f30623096b9275946be8ed8f210ec3ec83f15b416f8296c4e7e947'}},
+   ..."""
+
+
+def download_nearest(dt, product=PRODUCT1, **kwargs):
+    s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
+    results = search_s3(dt=dt, s3=s3, product=product)
+    print(f"Found {len(results)} results")
+    keys = [r["Key"] for r in results]
+    start_times = [parse_goes_filename(f.split("/")[-1])["start_time"] for f in keys]
+    time_diffs = [dt - s for s in start_times]
+    min_dt, min_key = min(zip(time_diffs, keys), key=lambda x: x[0].total_seconds())
+    fname = min_key.split("/")[-1]
+    s3.download_file(
+        BUCKET,
+        Key=min_key,
+        Filename=fname,
+    )
+    return fname, min_key, min_dt
 
 
 """
@@ -90,12 +132,15 @@ def parse_goes_filename(fname):
     OR: Operational System Real-Time Data
     ABI-L2: Advanced Baseline Imager Level 2+ (other option is level 1, L1a, L1b)
     CMIPF: product. Cloud and Moisture Image Product – Full Disk
-    M3 / M4: ABI Mode 3 or ABI Mode 4
+    M3 / M4: ABI Mode 3, ABI Mode 4, Mode 6=10 minute flex
     C09: Channel Number (Band 9 in this example)
     G16: GOES-16
     sYYYYJJJHHMMSSs: Observation Start
     eYYYYJJJHHMMSSs: Observation End
     cYYYYJJJHHMMSSs: File Creation
+
+    L1 example:
+    OR_ABI-L2-MCMIPC-M6_G16_s20201800021177_e20201800023556_c20201800024106.nc
 
     """
 
@@ -103,8 +148,8 @@ def parse_goes_filename(fname):
         r"OR_ABI-"
         r"(?P<level>L[12b]+)-"
         r"(?P<product>\w+)-"
-        r"(?P<mode>M[34])"
-        r"(?P<channel>C\d+)_"
+        r"(?P<mode>M[3-6AM])"
+        r"(?P<channel>C\d+)?_"  # channel is optional
         r"(?P<platform>G\d+)_"
         r"s(?P<start_time>\w+)_"
         r"e(?P<end_time>\w+)_"
@@ -123,15 +168,59 @@ def parse_goes_filename(fname):
     return match_dict
 
 
-def subset_and_plot(fname, dset="Rad", proj="latlon", bounds=(-105, 30, -101, 33)):
+def warp_subset(
+    fname,
+    outname,
+    bounds=(-105, 30, -101, 33),
+    resolution=(0.001666666667, 0.001666666667),
+    resampling="bilinear",
+    dset=None,
+):
+    import gdal
+
+    # if fname.endswith('.nc') and dset is not None:
+    # src_name
+
+    dsg = gdal.Open(fname)
+    srcSRS = dsg.GetProjectionRef()
+    dstSRS = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+    xRes, yRes = resolution
+    gdal.Warp(
+        outname,
+        dsg,
+        xRes=xRes,
+        yRes=yRes,
+        srcSRS=srcSRS,
+        dstSRS=dstSRS,
+        multithread=True,
+        outputBounds=bounds,
+    )
+    dsg = None
+    return
+
+
+def subset(
+    fname,
+    dset="Rad",
+    proj="latlon",
+    bounds=(-105, 30, -101, 33),
+    resolution=(0.001666666667, 0.001666666667),
+    resampling=1,
+):
     # TODO: is warped vrt any better?
     left, bot, right, top = bounds
+
     if proj == "latlon":
         proj_str = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
     elif proj == "utm":
         proj_str = "+proj=utm +datum=WGS84 +zone=13"
     with rioxarray.open_rasterio(fname) as src:
-        xds_lonlat = src.rio.reproject(proj_str)
+        xds_lonlat = src.rio.reproject(
+            proj_str,
+            resolution=resolution,
+            resampling=resampling,
+            num_threads=20,
+        )
         subset_ds = xds_lonlat[dset][0].sel(x=slice(left, right), y=slice(top, bot))
-        subset_ds.plot.imshow()
+        # subset_ds.plot.imshow()
         return subset_ds
