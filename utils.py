@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import re
 from datetime import datetime
 
@@ -130,20 +131,25 @@ def filter_results_by_dt(s3_results, dt_start, dt_end):
     return [res for res, dt in zip(s3_results, start_times) if dt_start < dt < dt_end]
 
 
-def download_nearest(dt, product=PRODUCT_L1_CONUS, channel=1, **kwargs):
+def download_nearest(dt, product=PRODUCT_L1_CONUS, channel=1, outdir="data", **kwargs):
     s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
     s3_results = search_s3(dt=dt, s3=s3, product=product, channel=channel)
     time_diffs, keys = get_timediffs(dt, s3_results)
     min_dt, min_key = min(zip(time_diffs, keys), key=lambda x: abs(x[0]))
     fname = min_key.split("/")[-1]
-    _download_one_key(min_key, s3)
+    _download_one_key(min_key, s3, outdir=outdir)
     return fname, min_key, min_dt
 
 
-def _download_one_key(key, s3, overwrite=False, verbose=True):
+def _download_one_key(key, s3, outdir=".", overwrite=False, verbose=True):
+    if not os.path.exists(outdir):
+        print(f"Making directory {outdir}")
+        os.mkdir(outdir)
+
     fname = key.split("/")[-1]
-    if os.path.exists(fname) and not overwrite:
-        print(f"Skipping {fname}, already exists")
+    file_path = Path(outdir) / Path(fname)
+    if os.path.exists(file_path) and not overwrite:
+        print(f"Skipping {file_path}, already exists")
         return
     else:
         if verbose:
@@ -151,11 +157,13 @@ def _download_one_key(key, s3, overwrite=False, verbose=True):
         s3.download_file(
             BUCKET,
             Key=key,
-            Filename=fname,
+            Filename=file_path,
         )
 
 
-def download_range(dt_start, dt_end, product=PRODUCT_L1_CONUS, channel=1, **kwargs):
+def download_range(
+    dt_start, dt_end, product=PRODUCT_L1_CONUS, channel=1, outdir="data", **kwargs
+):
     import pandas as pd
 
     hourly_dt = pd.date_range(dt_start, dt_end, freq="H")
@@ -169,11 +177,11 @@ def download_range(dt_start, dt_end, product=PRODUCT_L1_CONUS, channel=1, **kwar
     s3_results = filter_results_by_dt(s3_results, dt_start, dt_end)
     # TODO: need to generalize these filters?
     s3_results = [
-        r for r in s3_results if parse_goes_filename(r["Key"])["Product"] == "RadM2"
+        r for r in s3_results if parse_goes_filename(r["Key"])["product"] == "RadM2"
     ]
     print(f"Downloading {len(s3_results)} files")
     for r in s3_results:
-        _download_one_key(r["Key"], s3, verbose=True)
+        _download_one_key(r["Key"], s3, outdir=outdir, verbose=True)
 
 
 """TODO
@@ -287,7 +295,7 @@ def warp_subset(
 def subset(
     fname,
     dset="Rad",
-    proj="latlon",
+    proj="lonlat",
     bounds=(-105, 30, -101, 33),
     resolution=(0.001666666667, 0.001666666667),
     resampling=1,
@@ -295,10 +303,13 @@ def subset(
     # TODO: is warped vrt any better?
     left, bot, right, top = bounds
 
-    if proj == "latlon":
-        proj_str = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+    if proj == "lonlat":
+        # proj_str = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+        proj_str = "EPSG:4326"
     elif proj == "utm":
         proj_str = "+proj=utm +datum=WGS84 +zone=13"
+    else:
+        proj_str = proj
     with rioxarray.open_rasterio(fname) as src:
         xds_lonlat = src.rio.reproject(
             proj_str,
