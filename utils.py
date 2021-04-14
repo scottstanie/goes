@@ -1,14 +1,14 @@
+import os
+import re
 from datetime import datetime
-
-# import cartopy.crs as ccrs
-import matplotlib.pyplot as plt
 
 # import metpy  # noqa: F401
 import numpy as np
 import rioxarray
 import xarray as xr
-import re
 
+# import cartopy.crs as ccrs
+import matplotlib.pyplot as plt
 import boto3
 from botocore import UNSIGNED
 from botocore.config import Config
@@ -40,13 +40,14 @@ Possible layers to use:
 # 2019-07-23 05:09:32  OR_ABI-L1b-RadC-M6C01_G16_s20192041006395_e20192041009167_c20192041009214.nc
 
 
-PRODUCT2 = "ABI-L2-MCMIPC"
-PRODUCT1 = "ABI-L1b-RadC"
+PRODUCT_L1_MESO = "ABI-L1b-RadM"  # MESOSCALE
+PRODUCT_CLOUD = "ABI-L2-MCMIPC"
+PRODUCT_L1_CONUS = "ABI-L1b-RadC"  # CONUS
 PLATFORM = "goes16"
 BUCKET = f"noaa-{PLATFORM}"
 
 
-def form_s3_search(dt, product=PRODUCT1, platform=PLATFORM, use_hour=True):
+def form_s3_search(dt, product=PRODUCT_L1_CONUS, platform=PLATFORM, use_hour=True):
 
     if use_hour:
         year_doy_hour = dt.strftime("%Y/%j/%H")
@@ -57,10 +58,13 @@ def form_s3_search(dt, product=PRODUCT1, platform=PLATFORM, use_hour=True):
 
     # example:
     # //noaa-goes16/ABI-L1b-RadC/2000/001/12/OR_ABI-L1b-RadC-M3C01_G16_s20000011200000_e20000011200000_c20170671748180.nc
-    mode = "*"
-    mode = "M3"
-    channel = "*"
-    # channel = "C01"
+    # mode = "*"
+    # M3: is mode 3 (scan operation),
+    # M4 is mode 4 (only full disk scans every five minutes – no mesoscale or CONUS)
+    # M6 is "...a new 10-minute flex mode": https://www.goes-r.gov/users/abiScanModeInfo.html
+    # mode = "M3"
+    # channel = "*"
+    # channel = "C01" # is channel or band 01, There will be sixteen bands, 01-16
     # prefix = f"{product}/{year_doy_hour}/OR_{product}-{mode}{channel}_G{platform[-2:]}_s{start_search}"
     prefix = f"{product}/{year_doy_hour}/"
     return prefix
@@ -70,7 +74,7 @@ def search_s3(
     search_prefix=None,
     dt=None,
     s3=None,
-    product=PRODUCT1,
+    product=PRODUCT_L1_CONUS,
     platform=PLATFORM,
     channel=None,
 ):
@@ -94,8 +98,7 @@ def search_s3(
         channel_str = f"C{channel:02d}"
         results = [r for r in results if channel_str in r["Key"]]
         print(f"Found {len(results)} results for channel {channel_str} ")
-    else:
-        return results
+    return results
 
 
 """Results:
@@ -109,26 +112,68 @@ def search_s3(
    ..."""
 
 
-def get_timediffs(dt, results):
-    keys = [r["Key"] for r in results]
+def get_start_times(s3_results):
+    keys = [r["Key"] for r in s3_results]
     start_times = [parse_goes_filename(f.split("/")[-1])["start_time"] for f in keys]
+    return start_times
+
+
+def get_timediffs(dt, s3_results):
+    keys = [r["Key"] for r in s3_results]
+    start_times = get_start_times(s3_results)
     time_diffs = [(dt - s).total_seconds() for s in start_times]
     return time_diffs, keys
 
 
-def download_nearest(dt, product=PRODUCT1, channel=1, **kwargs):
+def filter_results_by_dt(s3_results, dt_start, dt_end):
+    start_times = get_start_times(s3_results)
+    return [res for res, dt in zip(s3_results, start_times) if dt_start < dt < dt_end]
+
+
+def download_nearest(dt, product=PRODUCT_L1_CONUS, channel=1, **kwargs):
     s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
-    results = search_s3(dt=dt, s3=s3, product=product, channel=channel)
-    time_diffs, keys = get_timediffs(dt, results)
+    s3_results = search_s3(dt=dt, s3=s3, product=product, channel=channel)
+    time_diffs, keys = get_timediffs(dt, s3_results)
     min_dt, min_key = min(zip(time_diffs, keys), key=lambda x: abs(x[0]))
     fname = min_key.split("/")[-1]
-    print(f"Downloading {fname}")
-    s3.download_file(
-        BUCKET,
-        Key=min_key,
-        Filename=fname,
-    )
+    _download_one_key(min_key, s3)
     return fname, min_key, min_dt
+
+
+def _download_one_key(key, s3, overwrite=False, verbose=True):
+    fname = key.split("/")[-1]
+    if os.path.exists(fname) and not overwrite:
+        print(f"Skipping {fname}, already exists")
+        return
+    else:
+        if verbose:
+            print(f"Downloading {fname}")
+        s3.download_file(
+            BUCKET,
+            Key=key,
+            Filename=fname,
+        )
+
+
+def download_range(dt_start, dt_end, product=PRODUCT_L1_CONUS, channel=1, **kwargs):
+    import pandas as pd
+
+    hourly_dt = pd.date_range(dt_start, dt_end, freq="H")
+    print(f"Searching from {dt_start} to {dt_end}")
+
+    s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
+    s3_results = []
+    for dt in hourly_dt:
+        s3_results.extend(search_s3(dt=dt, s3=s3, product=product, channel=channel))
+
+    s3_results = filter_results_by_dt(s3_results, dt_start, dt_end)
+    # TODO: need to generalize these filters?
+    s3_results = [
+        r for r in s3_results if parse_goes_filename(r["Key"])["Product"] == "RadM2"
+    ]
+    print(f"Downloading {len(s3_results)} files")
+    for r in s3_results:
+        _download_one_key(r["Key"], s3, verbose=True)
 
 
 """TODO
@@ -170,6 +215,7 @@ def parse_goes_filename(fname):
     OR_ABI-L2-MCMIPC-M6_G16_s20201800021177_e20201800023556_c20201800024106.nc
 
     """
+    fname_noslash = fname.split("/")[-1]
 
     fname_pattern = re.compile(
         r"OR_ABI-"
@@ -183,9 +229,9 @@ def parse_goes_filename(fname):
         r"c(?P<creation_time>\w+).nc"
     )
     time_pattern = "%Y%j%H%M%S%f"
-    m = re.match(fname_pattern, fname)
+    m = re.match(fname_pattern, fname_noslash)
     if not m:
-        raise ValueError(f"{fname} does not match GOES format")
+        raise ValueError(f"{fname_noslash} does not match GOES format")
 
     time_pattern = "%Y%j%H%M%S%f"
     match_dict = m.groupdict()
@@ -193,6 +239,18 @@ def parse_goes_filename(fname):
         match_dict[k] = datetime.strptime(match_dict[k], time_pattern)
 
     return match_dict
+
+
+def bbox(ds, x="x", y="y"):
+    """Get (left, bot, right, top) of xarray dataset with `x`, `y` coordinates"""
+    bbox = ds[x].min(), ds[y].min(), ds[x].max(), ds[y].max()
+    # will be a tuple of DataArrays. We just want the values
+    return tuple(c.item() for c in bbox)
+
+
+# Easy reprojection:
+# with rioxarray.open_rasterio(f) as src:
+# src_lonlat = src.rio.reproject("EPSG:4326")
 
 
 def warp_subset(
@@ -246,7 +304,7 @@ def subset(
             proj_str,
             resolution=resolution,
             resampling=resampling,
-            num_threads=20,
+            # num_threads=20, # option seems to have disappeared
         )
         subset_ds = xds_lonlat[dset][0].sel(x=slice(left, right), y=slice(top, bot))
         # subset_ds.plot.imshow()
