@@ -137,8 +137,8 @@ def download_nearest(dt, product=PRODUCT_L1_CONUS, channel=1, outdir="data", **k
     time_diffs, keys = get_timediffs(dt, s3_results)
     min_dt, min_key = min(zip(time_diffs, keys), key=lambda x: abs(x[0]))
     fname = min_key.split("/")[-1]
-    _download_one_key(min_key, s3, outdir=outdir)
-    return fname, min_key, min_dt
+    file_path = _download_one_key(min_key, s3, outdir=outdir)
+    return file_path, min_key, min_dt
 
 
 def _download_one_key(key, s3, outdir=".", overwrite=False, verbose=True):
@@ -147,18 +147,15 @@ def _download_one_key(key, s3, outdir=".", overwrite=False, verbose=True):
         os.mkdir(outdir)
 
     fname = key.split("/")[-1]
-    file_path = Path(outdir) / Path(fname)
+    file_path = (Path(outdir) / Path(fname)).absolute()
     if os.path.exists(file_path) and not overwrite:
         print(f"Skipping {file_path}, already exists")
         return
     else:
         if verbose:
             print(f"Downloading {fname}")
-        s3.download_file(
-            BUCKET,
-            Key=key,
-            Filename=file_path,
-        )
+        s3.download_file(BUCKET, Key=key, Filename=str(file_path))
+    return file_path
 
 
 def download_range(
@@ -263,35 +260,43 @@ def bbox(ds, x="x", y="y"):
 
 def warp_subset(
     fname,
-    outname,
+    outname="",
     bounds=(-105, 30, -101, 33),
     resolution=(0.001666666667, 0.001666666667),
     resampling="bilinear",
-    dset=None,
+    dset="Rad",
 ):
     import gdal
 
-    # if fname.endswith('.nc') and dset is not None:
-    # src_name
-
-    dsg = gdal.Open(fname)
+    if fname.endswith(".nc") and dset is not None:
+        src_name = f"NETCDF:{fname}:{dset}"
+    else:
+        src_name = fname
+    dsg = gdal.Open(src_name)
     srcSRS = dsg.GetProjectionRef()
     dstSRS = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
     xRes, yRes = resolution
-    gdal.Warp(
+
+    # If no output specified, use an in-memory VRT. Otherwise, dont override extension
+    out_format = "VRT" if not outname else None
+
+    out_ds = gdal.Warp(
         outname,
         dsg,
+        format=out_format,
         xRes=xRes,
         yRes=yRes,
         srcSRS=srcSRS,
         dstSRS=dstSRS,
         multithread=True,
+        resampleAlg=resampling,
         outputBounds=bounds,
     )
     dsg = None
-    return
+    return out_ds.ReadAsArray()
 
 
+# NOTE: for now just use the above
 def subset(
     fname,
     dset="Rad",
@@ -300,6 +305,7 @@ def subset(
     resolution=(0.001666666667, 0.001666666667),
     resampling=1,
 ):
+    # TODO: why the eff is this 100x slower than the gdal.Warp version?
     # TODO: is warped vrt any better?
     left, bot, right, top = bounds
 
