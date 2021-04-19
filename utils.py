@@ -353,7 +353,7 @@ def plot_series(file_paths, bounds, dset="CMI"):
         layout = (1, nfiles)
 
     fig, axes = plt.subplots(*layout, sharex=True, sharey=True)
-    for ax, cm, t in zip(axes, cmip_list, cmip_times):
+    for ax, cm, t in zip(axes.ravel(), cmip_list, cmip_times):
         axim = ax.imshow(cm, cmap="RdBu_r")
         fig.colorbar(axim, ax=ax)
         ax.set_title(t.strftime("%H:%M"))
