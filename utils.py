@@ -341,11 +341,11 @@ def warp_subset(
     return out_arr
 
 
-def plot_series(file_paths, bounds, dset="CMI"):
-    cmip_times = [parse_goes_filename(f)["start_time"] for f in file_paths]
-    cmip_list = [warp_subset(f, bounds=bounds, dset=dset) for f in file_paths]
+def plot_series(file_paths, bounds, dset="CMI", title_format="time"):
+    metas = [parse_goes_filename(f) for f in file_paths]
+    image_list = [warp_subset(f, bounds=bounds, dset=dset) for f in file_paths]
 
-    nfiles = len(cmip_list)
+    nfiles = len(image_list)
     if nfiles > 3:
         ntiles = int(np.ceil(np.sqrt(nfiles)))
         layout = (ntiles, ntiles)
@@ -353,11 +353,18 @@ def plot_series(file_paths, bounds, dset="CMI"):
         layout = (1, nfiles)
 
     fig, axes = plt.subplots(*layout, sharex=True, sharey=True)
-    for ax, cm, t in zip(axes.ravel(), cmip_list, cmip_times):
+    for ax, cm, m in zip(axes.ravel(), image_list, metas):
         axim = ax.imshow(cm, cmap="RdBu_r")
         fig.colorbar(axim, ax=ax)
-        ax.set_title(t.strftime("%H:%M"))
-    fig.suptitle(t.strftime("%Y-%m-%d"))
+        if title_format == "time":
+            title = m["start_time"].strftime("%H:%M")
+        elif title_format == "channel":
+            title = m["channel"]
+        else:
+            raise ValueError("Unknown title_format")
+        ax.set_title(title)
+
+    fig.suptitle(m["start_time"].strftime("%Y-%m-%d"))
     fig.tight_layout()
 
 
