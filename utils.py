@@ -341,7 +341,7 @@ def warp_subset(
     return out_arr
 
 
-def plot_series(file_paths, bounds, dset="CMI", title_format="time"):
+def plot_series(file_paths, bounds, cmap="RdBu_r", dset="CMI", title_format="time"):
     metas = [parse_goes_filename(f) for f in file_paths]
     image_list = [warp_subset(f, bounds=bounds, dset=dset) for f in file_paths]
 
@@ -354,7 +354,7 @@ def plot_series(file_paths, bounds, dset="CMI", title_format="time"):
 
     fig, axes = plt.subplots(*layout, sharex=True, sharey=True)
     for ax, cm, m in zip(axes.ravel(), image_list, metas):
-        axim = ax.imshow(cm, cmap="RdBu_r")
+        axim = ax.imshow(cm, map=cmap)
         fig.colorbar(axim, ax=ax)
         if title_format == "time":
             title = m["start_time"].strftime("%H:%M")
