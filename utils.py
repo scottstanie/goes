@@ -7,6 +7,7 @@ from datetime import datetime
 import numpy as np
 import rioxarray
 import xarray as xr
+import pandas as pd
 
 # import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
@@ -14,10 +15,15 @@ import boto3
 from botocore import UNSIGNED
 from botocore.config import Config
 
+# TODO:
+# 2. Go from sentinel 1 filename -> start_time -> download nearest
+# 3. seearch all sentinel files, download all matching RadC
+
 """
 https://docs.opendata.aws/noaa-goes16/cics-readme.html
 Possible layers to use:
     ABI-L1b-RadC - Advanced Baseline Imager Level 1b CONUS
+    ABI-L1b-RadF - Advanced Baseline Imager Level 1b Full Disk
 
     ABI-L2-CMIPC - Advanced Baseline Imager Level 2 Cloud and Moisture Imagery CONUS
     ABI-L2-CTPC - Advanced Baseline Imager Level 2 Cloud Top Pressure CONUS
@@ -29,12 +35,11 @@ Possible layers to use:
     ABI-L2-ACTPC - Advanced Baseline Imager Level 2 Cloud Top Phase CONUS
     ABI-L2-MCMIPC - Advanced Baseline Imager Level 2 Cloud and Moisture Imagery CONUS
     ABI-L2-TPWC - Advanced Baseline Imager Level 2 Total Precipitable Water CONUS
-
     ABI-L2-CPSC - Advanced Baseline Imager Level 2 Cloud Particle Size CONUS
     ABI-L2-LSTC - Advanced Baseline Imager Level 2 Land Surface Temperature CONUS
 
-    ABI-L1b-RadF - Advanced Baseline Imager Level 1b Full Disk
 """
+ALL_PRODUCTS = pd.read_csv("product_list.csv")
 
 # $ aws s3 ls s3://noaa-goes16/ABI-L1b-RadC/2019/204/10/  --no-sign-request |head
 # 2019-07-23 05:04:27  OR_ABI-L1b-RadC-M6C01_G16_s20192041001395_e20192041004167_c20192041004217.nc
@@ -46,6 +51,36 @@ PRODUCT_CLOUD = "ABI-L2-MCMIPC"
 PRODUCT_L1_CONUS = "ABI-L1b-RadC"  # CONUS
 PLATFORM = "goes16"
 BUCKET = f"noaa-{PLATFORM}"
+
+
+def download_nearest(
+    dt, n=1, product=PRODUCT_L1_CONUS, channels=[1], outdir="data", **kwargs
+):
+    """Download the nearest `n` closest products to the given datetime `dt`"""
+    s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
+    s3_results = search_s3(dt=dt, s3=s3, product=product, channels=channels)
+
+    closest_n = []
+    for channel in channels:
+        # Find the nearest separetely for each channel
+        time_diffs, keys = get_timediffs(
+            dt, filter_results_by_channel(s3_results, [channel])
+        )
+
+        cur_closest = sorted(zip(time_diffs, keys), key=lambda x: abs(x[0]))[:n]
+        closest_n.extend(cur_closest)
+
+    # Now re-sort so that the products are in ascending time order
+    closest_n = sorted(closest_n)
+
+    file_paths = []
+    for tdiff, key in closest_n:
+        print(
+            f"Downloading {key}, occurs {abs(tdiff)} seconds {'before' if tdiff < 0 else 'after'} {dt}"
+        )
+        file_path = _download_one_key(key, s3, outdir=outdir, verbose=True)
+        file_paths.append(file_path)
+    return file_paths, closest_n
 
 
 def form_s3_search(dt, product=PRODUCT_L1_CONUS, platform=PLATFORM, use_hour=True):
@@ -77,7 +112,7 @@ def search_s3(
     s3=None,
     product=PRODUCT_L1_CONUS,
     platform=PLATFORM,
-    channel=None,
+    channels=None,
 ):
     if search_prefix is None:
         search_prefix = form_s3_search(dt, product=product, platform=platform)
@@ -95,10 +130,9 @@ def search_s3(
     )
     results = [obj for page in page_iterator for obj in page.get("Contents", [])]
     print(f"Found {len(results)} results")
-    if channel:
-        channel_str = f"C{channel:02d}"
-        results = [r for r in results if channel_str in r["Key"]]
-        print(f"Found {len(results)} results for channel {channel_str} ")
+    if channels:
+        results = filter_results_by_channel(results, channels)
+        print(f"Found {len(results)} results for channels {channels} ")
     return results
 
 
@@ -122,7 +156,7 @@ def get_start_times(s3_results):
 def get_timediffs(dt, s3_results):
     keys = [r["Key"] for r in s3_results]
     start_times = get_start_times(s3_results)
-    time_diffs = [(dt - s).total_seconds() for s in start_times]
+    time_diffs = [(s - dt).total_seconds() for s in start_times]
     return time_diffs, keys
 
 
@@ -131,14 +165,10 @@ def filter_results_by_dt(s3_results, dt_start, dt_end):
     return [res for res, dt in zip(s3_results, start_times) if dt_start < dt < dt_end]
 
 
-def download_nearest(dt, product=PRODUCT_L1_CONUS, channel=1, outdir="data", **kwargs):
-    s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
-    s3_results = search_s3(dt=dt, s3=s3, product=product, channel=channel)
-    time_diffs, keys = get_timediffs(dt, s3_results)
-    min_dt, min_key = min(zip(time_diffs, keys), key=lambda x: abs(x[0]))
-    fname = min_key.split("/")[-1]
-    file_path = _download_one_key(min_key, s3, outdir=outdir)
-    return file_path, min_key, min_dt
+def filter_results_by_channel(s3_results, channels):
+    channel_strs = [f"C{channel:02d}" for channel in channels]
+    s3_results = [r for r in s3_results if any(c in r["Key"] for c in channel_strs)]
+    return s3_results
 
 
 def _download_one_key(key, s3, outdir=".", overwrite=False, verbose=True):
@@ -147,19 +177,19 @@ def _download_one_key(key, s3, outdir=".", overwrite=False, verbose=True):
         os.mkdir(outdir)
 
     fname = key.split("/")[-1]
-    file_path = (Path(outdir) / Path(fname)).absolute()
+    file_path = str((Path(outdir) / Path(fname)).absolute())
     if os.path.exists(file_path) and not overwrite:
         print(f"Skipping {file_path}, already exists")
-        return
+        return file_path
     else:
         if verbose:
             print(f"Downloading {fname}")
-        s3.download_file(BUCKET, Key=key, Filename=str(file_path))
+        s3.download_file(BUCKET, Key=key, Filename=file_path)
     return file_path
 
 
 def download_range(
-    dt_start, dt_end, product=PRODUCT_L1_CONUS, channel=1, outdir="data", **kwargs
+    dt_start, dt_end, product=PRODUCT_L1_CONUS, channels=[1], outdir="data", **kwargs
 ):
     import pandas as pd
 
@@ -169,7 +199,7 @@ def download_range(
     s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
     s3_results = []
     for dt in hourly_dt:
-        s3_results.extend(search_s3(dt=dt, s3=s3, product=product, channel=channel))
+        s3_results.extend(search_s3(dt=dt, s3=s3, product=product, channels=channels))
 
     s3_results = filter_results_by_dt(s3_results, dt_start, dt_end)
     # TODO: need to generalize these filters?
@@ -181,22 +211,17 @@ def download_range(
         _download_one_key(r["Key"], s3, outdir=outdir, verbose=True)
 
 
-"""TODO
-warp_subset( 'NETCDF:OR_ABI-L1b-RadC-M6C02_G16_s20200600056143_e20200600058516_c20200600058546.nc:Rad', 'test2020229_rad2.tif', bounds=(-104.33, 31.6, -103.7, 31.9))
-    """
-
-
 """
 In [23]: utils.search_s3(prefix)
 Out[23]:
-[{'Key': 'ABI-L2-MCMIPC/2019/204/00/OR_ABI-L2-MCMIPC-M6_G16_s20192040001394_e20192040004167_c20192040004279.nc',
+[{'Key': 'ABI-L2-MCMIPC/2019/204/00/OR_ABI-L2-M..._c20192040004279.nc',
   'LastModified': datetime.datetime(2019, 7, 23, 0, 4, 52, tzinfo=tzutc()),
   'ETag': '"ad0517035e1c7d99724999d6f27ff880-8"',
   'Size': 60042281,
   'StorageClass': 'INTELLIGENT_TIERING',
   'Owner': {'DisplayName': 'sandbox',
    'ID': '07cd0b2bd0f30623096b9275946be8ed8f210ec3ec83f15b416f8296c4e7e947'}},
- {'Key': 'ABI-L2-MCMIPC/2019/204/00/OR_ABI-L2-MCMIPC-M6_G16_s20192040006394_e20192040009167_c20192040009282.nc',
+ {'Key': 'ABI-L2-MCMIPC/2019/204/00/OR_ABI-L2-..._c20192040009282.nc',
  ...
  """
 
@@ -204,12 +229,19 @@ Out[23]:
 def parse_goes_filename(fname):
     """Parses attributes of file available in filename
 
+    The main categories are separated by underscores:
+    ops environment, Data Set Name (DSN), platform, start, end, created
+
+
+    The DSN has multiple sub-fields, e.g.: DSN for the
+    Lighting Detection product is “GLM-L2-LCFA”
+
     e.g.
-    OR_ABI-L1b-RadC-M3C01_G16_s20190621802131_e20190621804504_c20190621804546.nc
+    OR_ABI-L2-MCMIPF-M6_G16_s20201800021177_e20201800023556_c20201800024106.nc
     OR: Operational System Real-Time Data
     ABI-L2: Advanced Baseline Imager Level 2+ (other option is level 1, L1a, L1b)
     CMIPF: product. Cloud and Moisture Image Product – Full Disk
-    M3 / M4: ABI Mode 3, ABI Mode 4, Mode 6=10 minute flex
+    M3/M4/M6: ABI Mode 3, 4 or 6, (Mode 6=10 minute flex)
     C09: Channel Number (Band 9 in this example)
     G16: GOES-16
     sYYYYJJJHHMMSSs: Observation Start
@@ -217,17 +249,19 @@ def parse_goes_filename(fname):
     cYYYYJJJHHMMSSs: File Creation
 
     L1 example:
-    OR_ABI-L2-MCMIPC-M6_G16_s20201800021177_e20201800023556_c20201800024106.nc
+    OR_ABI-L1b-RadC-M3C01_G16_s20190621802131_e20190621804504_c20190621804546.nc
+    Lightning mapper:
+    OR_GLM-L2-LCFA_G16_s20190720000000_e20190720000200_c20190720000226.nc
 
+    Reference:
+    https://www.goes-r.gov/products/docs/PUG-L2+-vol5.pdf
+    Appendix A
     """
     fname_noslash = fname.split("/")[-1]
 
     fname_pattern = re.compile(
-        r"OR_ABI-"
-        r"(?P<level>L[12b]+)-"
-        r"(?P<product>\w+)-"
-        r"(?P<mode>M[3-6AM])"
-        r"(?P<channel>C\d+)?_"  # channel is optional
+        r"OR_"
+        r"(?P<DSN>.*)_"
         r"(?P<platform>G\d+)_"
         r"s(?P<start_time>\w+)_"
         r"e(?P<end_time>\w+)_"
@@ -243,6 +277,16 @@ def parse_goes_filename(fname):
     for k in ("start_time", "end_time", "creation_time"):
         match_dict[k] = datetime.strptime(match_dict[k], time_pattern)
 
+    if "ABI" in match_dict["DSN"]:
+        dsn_pattern = re.compile(
+            r"(?P<instrument>ABI|GLM)-"  # fix this
+            r"(?P<level>L[12b]+)-"
+            r"(?P<product>\w+)-"
+            r"(?P<mode>M[3-6AM])"
+            r"(?P<channel>C\d+)?"  # channel is optional
+        )
+        m2 = re.match(dsn_pattern, match_dict["DSN"])
+        match_dict.update(m2.groupdict())
     return match_dict
 
 
@@ -262,7 +306,7 @@ def warp_subset(
     fname,
     outname="",
     bounds=(-105, 30, -101, 33),
-    resolution=(0.001666666667, 0.001666666667),
+    resolution=(1 / 600, 1 / 600),
     resampling="bilinear",
     dset="Rad",
 ):
@@ -292,37 +336,103 @@ def warp_subset(
         resampleAlg=resampling,
         outputBounds=bounds,
     )
-    dsg = None
-    return out_ds.ReadAsArray()
+    out_arr = out_ds.ReadAsArray()
+    # Make sure to close the files
+    out_ds, dsg = None, None
+    return out_arr
 
 
-# NOTE: for now just use the above
-def subset(
-    fname,
-    dset="Rad",
-    proj="lonlat",
-    bounds=(-105, 30, -101, 33),
-    resolution=(0.001666666667, 0.001666666667),
-    resampling=1,
+def plot_series(file_paths, bounds, dset="CMI"):
+    cmip_times = [parse_goes_filename(f)["start_time"] for f in file_paths]
+    cmip_list = [warp_subset(f, bounds=bounds, dset=dset) for f in file_paths]
+    fig, axes = plt.subplots(1, len(cmip_list), sharex=True, sharey=True)
+    for ax, cm, t in zip(axes, cmip_list, cmip_times):
+        axim = ax.imshow(cm, cmap="RdBu_r")
+        fig.colorbar(axim, ax=ax)
+        ax.set_title(t.strftime("%H:%M"))
+    fig.suptitle(t.strftime("%Y-%m-%d"))
+    fig.tight_layout()
+
+
+def create_rgb(
+    dt,
+    bounds,
+    resolution=(1 / 600, 1 / 600),
+    n=1,
+    outdir="data",
+    gamma=0.7,
 ):
-    # TODO: why the eff is this 100x slower than the gdal.Warp version?
-    # TODO: is warped vrt any better?
-    left, bot, right, top = bounds
+    file_paths, _ = download_nearest(
+        dt,
+        n=1,
+        product=PRODUCT_L1_CONUS,
+        channels=[1, 2, 3],
+    )
+    R = warp_subset(file_paths[0], bounds=bounds, resolution=resolution)
+    G = warp_subset(file_paths[2], bounds=bounds, resolution=resolution)
+    B = warp_subset(file_paths[1], bounds=bounds, resolution=resolution)
+    return combine_rgb(R, G, B, gamma=gamma)
 
-    if proj == "lonlat":
-        # proj_str = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
-        proj_str = "EPSG:4326"
-    elif proj == "utm":
-        proj_str = "+proj=utm +datum=WGS84 +zone=13"
-    else:
-        proj_str = proj
-    with rioxarray.open_rasterio(fname) as src:
-        xds_lonlat = src.rio.reproject(
-            proj_str,
-            resolution=resolution,
-            resampling=resampling,
-            # num_threads=20, # option seems to have disappeared
-        )
-        subset_ds = xds_lonlat[dset][0].sel(x=slice(left, right), y=slice(top, bot))
-        # subset_ds.plot.imshow()
-        return subset_ds
+
+def combine_rgb(R, G, B, gamma=0.7):
+    """Combine the Red, "Veggie" (G), and Blue bands to make true-color image
+
+    These are bands 1, 3, 2 of the ABI imager for R, G, B
+
+    Reference:
+    True color guide:
+    http://cimss.ssec.wisc.edu/goes/OCLOFactSheetPDFs/ABIQuickGuide_CIMSSRGB_v2.pdf
+    tutorial:
+    https://unidata.github.io/python-gallery/examples/mapping_GOES16_TrueColor.html
+    """
+    from skimage.exposure import rescale_intensity, adjust_gamma
+    from skimage.util import img_as_float
+
+    Rg = adjust_gamma(rescale_intensity(img_as_float(R)), gamma)
+    Gg = adjust_gamma(rescale_intensity(img_as_float(G)), gamma)
+    Bg = adjust_gamma(rescale_intensity(img_as_float(B)), gamma)
+    G_true = 0.45 * Rg + 0.1 * Gg + 0.45 * Bg
+
+    return np.dstack([Rg, G_true, Bg])
+
+
+def convert_utc_to_local(dt, to_zone="America/Chicago"):
+    from dateutil import tz
+
+    from_zone = tz.gettz("UTC")
+    # TODO: get somehow from the image?
+    to_zone = tz.gettz(to_zone)
+    # Tell the datetime object that it's in UTC time zone, then convert
+    return dt.replace(tzinfo=from_zone).astimezone(to_zone)
+
+
+# # NOTE: for now just use the above
+# def subset(
+#     fname,
+#     dset="Rad",
+#     proj="lonlat",
+#     bounds=(-105, 30, -101, 33),
+#     resolution=(0.001666666667, 0.001666666667),
+#     resampling=1,
+# ):
+#     # TODO: why the eff is this 100x slower than the gdal.Warp version?
+#     # TODO: is warped vrt any better?
+#     left, bot, right, top = bounds
+
+#     if proj == "lonlat":
+#         # proj_str = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+#         proj_str = "EPSG:4326"
+#     elif proj == "utm":
+#         proj_str = "+proj=utm +datum=WGS84 +zone=13"
+#     else:
+#         proj_str = proj
+#     with rioxarray.open_rasterio(fname) as src:
+#         xds_lonlat = src.rio.reproject(
+#             proj_str,
+#             resolution=resolution,
+#             resampling=resampling,
+#             # num_threads=20, # option seems to have disappeared
+#         )
+#         subset_ds = xds_lonlat[dset][0].sel(x=slice(left, right), y=slice(top, bot))
+#         # subset_ds.plot.imshow()
+#         return subset_ds

@@ -1,0 +1,68 @@
+name, description
+ABI-L1b-RadF, Level 1b Full Disk
+ABI-L1b-RadC, Level 1b CONUS
+ABI-L1b-RadM, Level 1b Mesoscale
+ABI-L2-ACHAC, Level 2 Cloud Top Height CONUS
+ABI-L2-ACHAF, Level 2 Cloud Top Height Full Disk
+ABI-L2-ACHAM, Level 2 Cloud Top Height Mesoscale
+ABI-L2-ACHTF, Level 2 Cloud Top Temperature Full Disk
+ABI-L2-ACHTM, Level 2 Cloud Top Temperature Mesoscale
+ABI-L2-ACMC, Level 2 Clear Sky Mask CONUS
+ABI-L2-ACMF, Level 2 Clear Sky Mask Full Disk
+ABI-L2-ACMM, Level 2 Clear Sky Mask Mesoscale
+ABI-L2-ACTPC, Level 2 Cloud Top Phase CONUS
+ABI-L2-ACTPF, Level 2 Cloud Top Phase Full Disk
+ABI-L2-ACTPM, Level 2 Cloud Top Phase Mesoscale
+ABI-L2-ADPC, Level 2 Aerosol Detection CONUS
+ABI-L2-ADPF, Level 2 Aerosol Detection Full Disk
+ABI-L2-ADPM, Level 2 Aerosol Detection Mesoscale
+ABI-L2-AODC, Level 2 Aerosol Optical Depth CONUS
+ABI-L2-AODF, Level 2 Aerosol Optical Depth Full Disk
+ABI-L2-CMIPC, Level 2 Cloud and Moisture Imagery CONUS
+ABI-L2-CMIPF, Level 2 Cloud and Moisture Imagery Full Disk
+ABI-L2-CMIPM, Level 2 Cloud and Moisture Imagery Mesoscale
+ABI-L2-CODC, Level 2 Cloud Optical Depth CONUS
+ABI-L2-CODF, Level 2 Cloud Optical Depth Full Disk
+ABI-L2-CPSC, Level 2 Cloud Particle Size CONUS
+ABI-L2-CPSF, Level 2 Cloud Particle Size Full Disk
+ABI-L2-CPSM, Level 2 Cloud Particle Size Mesoscale
+ABI-L2-CTPC, Level 2 Cloud Top Pressure CONUS
+ABI-L2-CTPF, Level 2 Cloud Top Pressure Full Disk
+ABI-L2-DMWC, Level 2 Derived Motion Winds CONUS
+ABI-L2-DMWF, Level 2 Derived Motion Winds Full Disk
+ABI-L2-DMWM, Level 2 Derived Motion Winds Mesoscale
+ABI-L2-DSIC, Level 2 Derived Stability Indices CONUS
+ABI-L2-DSIF, Level 2 Derived Stability Indices Full Disk
+ABI-L2-DSIM, Level 2 Derived Stability Indices Mesoscale
+ABI-L2-DSRC, Level 2 Downward Shortwave Radiation CONUS
+ABI-L2-DSRF, Level 2 Downward Shortwave Radiation Full Disk
+ABI-L2-DSRM, Level 2 Downward Shortwave Radiation Mesoscale
+ABI-L2-FDCC, Level 2 Fire (Hot Spot Characterization) CONUS
+ABI-L2-FDCF, Level 2 Fire (Hot Spot Characterization) Full Disk
+ABI-L2-LSTC, Level 2 Land Surface Temperature CONUS
+ABI-L2-LSTF, Level 2 Land Surface Temperature Full Disk
+ABI-L2-LSTM, Level 2 Land Surface Temperature Mesoscale
+ABI-L2-LVMPC, Level 2 Legacy Vertical Moisture Profile CONUS
+ABI-L2-LVMPF, Level 2 Legacy Vertical Moisture Profile Full Disk
+ABI-L2-LVMPM, Level 2 Legacy Vertical Moisture Profile Mesoscale
+ABI-L2-LVTPC, Level 2 Legacy Vertical Temperature Profile CONUS
+ABI-L2-LVTPF, Level 2 Legacy Vertical Temperature Profile Full Disk
+ABI-L2-LVTPM, Level 2 Legacy Vertical Temperature Profile Mesoscale
+ABI-L2-MCMIPC, Level 2 Cloud and Moisture Imagery CONUS
+ABI-L2-MCMIPF, Level 2 Cloud and Moisture Imagery Full Disk
+ABI-L2-MCMIPM, Level 2 Cloud and Moisture Imagery Mesoscale
+ABI-L2-RRQPEF, Level 2 Rainfall Rate (Quantitative Precipitation Estimate) Full Disk
+ABI-L2-RSRC, Level 2 Reflected Shortwave Radiation Top-Of-Atmosphere CONUS
+ABI-L2-RSRF, Level 2 Reflected Shortwave Radiation Top-Of-Atmosphere Full Disk
+ABI-L2-SSTF, Level 2 Sea Surface (Skin) Temperature Full Disk
+ABI-L2-TPWC, Level 2 Total Precipitable Water CONUS
+ABI-L2-TPWF, Level 2 Total Precipitable Water Full Disk
+ABI-L2-TPWM, Level 2 Total Precipitable Water Mesoscale
+ABI-L2-VAAF, Level 2 Volcanic Ash: Detection and Height Full Disk
+GLM-L2-LCFA, Level 2 Lightning Detection
+SUVI-L1b-Fe093, Level 1b Extreme Ultraviolet
+SUVI-L1b-Fe131, Level 1b Extreme Ultraviolet
+SUVI-L1b-Fe171, Level 1b Extreme Ultraviolet
+SUVI-L1b-Fe195, Level 1b Extreme Ultraviolet
+SUVI-L1b-Fe284, Level 1b Extreme Ultraviolet
+SUVI-L1b-He303, Level 1b Extreme Ultraviolet
