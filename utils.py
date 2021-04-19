@@ -6,7 +6,6 @@ from datetime import datetime
 # import metpy  # noqa: F401
 import numpy as np
 import rioxarray
-import xarray as xr
 import pandas as pd
 
 # import cartopy.crs as ccrs
@@ -404,6 +403,22 @@ def convert_utc_to_local(dt, to_zone="America/Chicago"):
     to_zone = tz.gettz(to_zone)
     # Tell the datetime object that it's in UTC time zone, then convert
     return dt.replace(tzinfo=from_zone).astimezone(to_zone)
+
+
+def interp_goes(dt, file1, file2):
+    import xarray as xr
+
+    t1 = parse_goes_filename(file1)["start_time"]
+    t2 = parse_goes_filename(file2)["start_time"]
+    alpha = (dt - t1).seconds / (t2 - t1).seconds
+    # Make sure that dt is between t1 and t2
+    assert 0 <= alpha <= 1
+    # an alpha = 0 means the desired time is right on image1 (dt == t1)
+    # alpha = 1 means dt == t2
+    # interpolated will be (1 - alpha) * image1 + alpha * image2
+    image1 = xr.open_dataset(file1)
+    image2 = xr.open_dataset(file2)
+    return (1 - alpha) * image1 + alpha * image2
 
 
 # # NOTE: for now just use the above
