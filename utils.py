@@ -60,12 +60,17 @@ def download_nearest(
     s3_results = search_s3(dt=dt, s3=s3, product=product, channels=channels)
 
     closest_n = []
-    for channel in channels:
-        # Find the nearest separetely for each channel
-        time_diffs, keys = get_timediffs(
-            dt, filter_results_by_channel(s3_results, [channel])
-        )
+    if channels:
+        for channel in channels:
+            # Find the nearest separetely for each channel
+            time_diffs, keys = get_timediffs(
+                dt, filter_results_by_channel(s3_results, [channel])
+            )
 
+            cur_closest = sorted(zip(time_diffs, keys), key=lambda x: abs(x[0]))[:n]
+            closest_n.extend(cur_closest)
+    else:
+        time_diffs, keys = get_timediffs(dt, s3_results)
         cur_closest = sorted(zip(time_diffs, keys), key=lambda x: abs(x[0]))[:n]
         closest_n.extend(cur_closest)
 
@@ -341,9 +346,11 @@ def warp_subset(
     return out_arr
 
 
-def plot_series(file_paths, bounds, cmap="RdBu_r", dset="CMI", title_format="time"):
-    metas = [parse_goes_filename(f) for f in file_paths]
-    image_list = [warp_subset(f, bounds=bounds, dset=dset) for f in file_paths]
+def plot_series(file_paths, bounds, cmap="RdBu_r", dsets=["CMI"], title_format="time"):
+    metas = [parse_goes_filename(f) for f in file_paths for d in dsets]
+    image_list = [
+        warp_subset(f, bounds=bounds, dset=d) for f in file_paths for d in dsets
+    ]
 
     nfiles = len(image_list)
     if nfiles > 3:
@@ -352,9 +359,9 @@ def plot_series(file_paths, bounds, cmap="RdBu_r", dset="CMI", title_format="tim
     else:
         layout = (1, nfiles)
 
-    fig, axes = plt.subplots(*layout, sharex=True, sharey=True)
+    fig, axes = plt.subplots(*layout, sharex=True, sharey=True, squeeze=False)
     for ax, cm, m in zip(axes.ravel(), image_list, metas):
-        axim = ax.imshow(cm, map=cmap)
+        axim = ax.imshow(cm, cmap=cmap)
         fig.colorbar(axim, ax=ax)
         if title_format == "time":
             title = m["start_time"].strftime("%H:%M")
