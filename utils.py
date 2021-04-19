@@ -344,7 +344,15 @@ def warp_subset(
 def plot_series(file_paths, bounds, dset="CMI"):
     cmip_times = [parse_goes_filename(f)["start_time"] for f in file_paths]
     cmip_list = [warp_subset(f, bounds=bounds, dset=dset) for f in file_paths]
-    fig, axes = plt.subplots(1, len(cmip_list), sharex=True, sharey=True)
+
+    nfiles = len(cmip_list)
+    if nfiles > 3:
+        ntiles = int(np.ceil(np.sqrt(nfiles)))
+        layout = (ntiles, ntiles)
+    else:
+        layout = (1, nfiles)
+
+    fig, axes = plt.subplots(*layout, sharex=True, sharey=True)
     for ax, cm, t in zip(axes, cmip_list, cmip_times):
         axim = ax.imshow(cm, cmap="RdBu_r")
         fig.colorbar(axim, ax=ax)
