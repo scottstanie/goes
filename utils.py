@@ -127,51 +127,44 @@ def download_range(
 
     s3_results = filter_results_by_dt(s3_results, dt_start, dt_end)
     if product == PRODUCT_L1_MESO:
+        # TODO: any way in advance to know the bounds of these mesoscale products?
         # TODO: need to generalize these filters?
-        # TODO: Do i actually want this filter? I now forget when/why I needed to do this...
-        print("Filtering based on 'product' = 'RadM2'")
+        prod = "RadM1"
+        from collections import Counter
+
+        print(Counter([parse_goes_filename(r["Key"])["product"] for r in s3_results]))
+        print(f"Filtering based on 'product' = {prod}")
         s3_results = [
-            r for r in s3_results if parse_goes_filename(r["Key"])["product"] == "RadM2"
+            r for r in s3_results if parse_goes_filename(r["Key"])["product"] == prod
         ]
     print(f"Downloading {len(s3_results)} files")
     for r in s3_results:
         _download_one_key(r["Key"], s3, outdir=outdir, platform=platform, verbose=True)
 
 
-def form_s3_search(dt, product=PRODUCT_L1_CONUS, use_hour=True):
-
-    if use_hour:
-        year_doy_hour = dt.strftime("%Y/%j/%H")
-    else:
-        year_doy_hour = dt.strftime("%Y/%j")
-    # start_search = dt.strftime("%Y%j%H%m")
-    # start_search = dt.strftime("%Y%j%H")
-
-    # example:
-    # //noaa-goes16/ABI-L1b-RadC/2000/001/12/OR_ABI-L1b-RadC-\
-    # M3C01_G16_s20000011200000_e20000011200000_c20170671748180.nc
-    # mode = "*"
-    # M3: is mode 3 (scan operation),
-    # M4 is mode 4 (only full disk scans every five minutes – no mesoscale or CONUS)
-    # M6 is "...a new 10-minute flex mode": https://www.goes-r.gov/users/abiScanModeInfo.html
-    # mode = "M3"
-    # channel = "*"
-    # channel = "C01" # is channel or band 01, There will be sixteen bands, 01-16
-    # prefix = f"{product}/{year_doy_hour}/OR_{product}-{mode}{channel}_G{platform[-2:]}_s{start_search}"
-    prefix = f"{product}/{year_doy_hour}/"
-    return prefix
+# example:
+# //noaa-goes16/ABI-L1b-RadC/2000/001/12/OR_ABI-L1b-RadC-\
+# M3C01_G16_s20000011200000_e20000011200000_c20170671748180.nc
+# mode = "*"
+# M3: is mode 3 (scan operation),
+# M4 is mode 4 (only full disk scans every five minutes – no mesoscale or CONUS)
+# M6 is "...a new 10-minute flex mode": https://www.goes-r.gov/users/abiScanModeInfo.html
+# mode = "M3"
+# channel = "*"
+# channel = "C01" # is channel or band 01, There will be sixteen bands, 01-16
+# prefix = f"{product}/{year_doy_hour}/OR_{product}-{mode}{channel}_G{platform[-2:]}_s{start_search}"
 
 
 def search_s3(
-    search_prefix=None,
     dt=None,
-    s3=None,
     product=PRODUCT_L1_CONUS,
     platform=PLATFORM_EAST,
     channels=None,
+    s3=None,
+    use_hour=True,
 ):
-    if search_prefix is None:
-        search_prefix = form_s3_search(dt, product=product)
+    year_doy_hour = dt.strftime("%Y/%j/%H") if use_hour else dt.strftime("%Y/%j")
+    search_prefix = f"{product}/{year_doy_hour}/"
     # Connect to s3 via boto
     print("Searching:", search_prefix)
 
@@ -219,7 +212,7 @@ def get_timediffs(dt, s3_results):
 
 def filter_results_by_dt(s3_results, dt_start, dt_end):
     start_times = get_start_times(s3_results)
-    return [res for res, dt in zip(s3_results, start_times) if dt_start < dt < dt_end]
+    return [res for res, dt in zip(s3_results, start_times) if dt_start <= dt <= dt_end]
 
 
 def filter_results_by_channel(s3_results, channels):
