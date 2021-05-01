@@ -277,7 +277,8 @@ def bbox(ds, x="x", y="y"):
 def warp_subset(
     fname,
     outname="",
-    bounds=(-105, 30, -101, 33),
+    bounds=None,
+    # bounds=(-105, 30, -101, 33),
     resolution=(1 / 600, 1 / 600),
     resampling="bilinear",
     dset="Rad",
@@ -292,7 +293,7 @@ def warp_subset(
     srcSRS = dsg.GetProjectionRef()
     dstSRS = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
     xRes, yRes = resolution
-    print(f"Warping to {bounds}")
+    # print(f"Warping to {bounds}")
 
     # If no output specified, use an in-memory VRT. Otherwise, dont override extension
     out_format = "VRT" if not outname else None
