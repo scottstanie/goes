@@ -1,6 +1,7 @@
 """Functions for downloading and warping/reprojecting GOES images
 """
 import os
+import datetime
 from pathlib import Path
 
 # import metpy  # noqa: F401
@@ -67,6 +68,7 @@ def download_nearest(
     **kwargs,
 ):
     """Download the nearest `n` closest products to the given datetime `dt`"""
+    dt = _check_tz(dt)
     s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
     s3_results = search_s3(
         dt=dt, s3=s3, product=product, platform=platform, channels=channels
@@ -102,6 +104,12 @@ def download_nearest(
     return file_paths, closest_n
 
 
+def _check_tz(dt):
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt
+
+
 def download_range(
     dt_start,
     dt_end,
@@ -112,6 +120,9 @@ def download_range(
     **kwargs,
 ):
     import pandas as pd
+
+    dt_start = _check_tz(dt_start)
+    dt_end = _check_tz(dt_end)
 
     hourly_dt = pd.date_range(dt_start, dt_end, freq="H")
     print(f"Searching from {dt_start} to {dt_end}")
