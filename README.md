@@ -1,5 +1,5 @@
 # GOES utils
-Downlaod and crop GOES-16/17 images from AWS
+Download and crop GOES-16/17 images from AWS
 
 # Example
 
