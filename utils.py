@@ -38,7 +38,7 @@ Possible layers to use:
     ABI-L2-LSTC - Advanced Baseline Imager Level 2 Land Surface Temperature CONUS
 
 """
-ALL_PRODUCTS = pd.read_csv("product_list.csv")
+ALL_PRODUCTS = pd.read_csv(Path(__file__).parent / "product_list.csv")
 
 # $ aws s3 ls s3://noaa-goes16/ABI-L1b-RadC/2019/204/10/  --no-sign-request |head
 # 2019-07-23 05:04:27  OR_ABI-L1b-RadC-M6C01_G16_s20192041001395_e20192041004167_c20192041004217.nc
@@ -287,7 +287,7 @@ def warp_subset(
     resampling="bilinear",
     dset="Rad",
 ):
-    import gdal
+    from osgeo import gdal
 
     if fname.endswith(".nc") and dset is not None:
         src_name = f"NETCDF:{fname}:{dset}"
@@ -378,3 +378,47 @@ def subset(
         subset_ds = xds_lonlat[dset][0].sel(x=slice(left, right), y=slice(top, bot))
         # subset_ds.plot.imshow()
         return subset_ds
+
+
+def create_rgb(
+    dt,
+    bounds,
+    resolution=(1 / 600, 1 / 600),
+    n=1,
+    outdir="data",
+    gamma=0.7,
+):
+    file_paths, _ = download_nearest(
+        dt,
+        n=1,
+        product=PRODUCT_L1_CONUS,
+        outdir=outdir,
+        channels=[1, 2, 3],
+    )
+    R = warp_subset(file_paths[0], bounds=bounds, resolution=resolution)
+    G = warp_subset(file_paths[2], bounds=bounds, resolution=resolution)
+    B = warp_subset(file_paths[1], bounds=bounds, resolution=resolution)
+    return combine_rgb(R, G, B, gamma=gamma)
+
+
+def combine_rgb(R, G, B, gamma=0.7):
+    """Combine the Red, "Veggie" (G), and Blue bands to make true-color image
+
+    These are bands 1, 3, 2 of the ABI imager for R, G, B
+
+    Reference:
+    True color guide:
+    http://cimss.ssec.wisc.edu/goes/OCLOFactSheetPDFs/ABIQuickGuide_CIMSSRGB_v2.pdf
+    tutorial:
+    https://unidata.github.io/python-gallery/examples/mapping_GOES16_TrueColor.html
+    """
+    from skimage.exposure import rescale_intensity, adjust_gamma
+    from skimage.util import img_as_float
+    import numpy as np
+
+    Rg = adjust_gamma(rescale_intensity(img_as_float(R)), gamma)
+    Gg = adjust_gamma(rescale_intensity(img_as_float(G)), gamma)
+    Bg = adjust_gamma(rescale_intensity(img_as_float(B)), gamma)
+    G_true = 0.45 * Rg + 0.1 * Gg + 0.45 * Bg
+
+    return np.dstack([Rg, G_true, Bg])
