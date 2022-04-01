@@ -2,3 +2,4 @@ __pycache__
 *.nc
 *.tif
 *.swp
+*egg*

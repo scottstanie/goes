@@ -13,7 +13,7 @@ import boto3
 from botocore import UNSIGNED
 from botocore.config import Config
 
-from parsing import parse_goes_filename
+from .parsing import parse_goes_filename
 
 # TODO:
 # 2. Go from sentinel 1 filename -> start_time -> download nearest
@@ -49,16 +49,25 @@ ALL_PRODUCTS = pd.read_csv(Path(__file__).parent / "product_list.csv")
 PRODUCT_L1_MESO = "ABI-L1b-RadM"  # MESOSCALE
 PRODUCT_CLOUD = "ABI-L2-MCMIPC"
 PRODUCT_L1_CONUS = "ABI-L1b-RadC"  # CONUS
+PRODUCT_RGB_CONUS = PRODUCT_CLOUD # alias to remind that this is what to use for RGB
 PLATFORM_EAST = "goes16"
 PLATFORM_WEST = "goes17"
 BUCKET_EAST = f"noaa-{PLATFORM_EAST}"
 BUCKET_WEST = f"noaa-{PLATFORM_WEST}"
-# Common channels:
+
+# Common channels: https://www.goes-r.gov/mission/ABI-bands-quick-info.html
 CHANNEL_B = 1
 CHANNEL_R = 2
 CHANNEL_G = 3
 CHANNEL_IR = 13
 # Note: unit of the clean IR channel is brightness temperature, NOT reflectance.
+L2_DSET_BLUE = "CMI_C01"
+L2_DSET_RED = "CMI_C02"
+L2_DSET_GREEN = "CMI_C03"
+L2_DSET_IR = "CMI_C13"
+
+# Latlon resolution (degrees) of approximately 1km grid
+RES_1KM = 0.008333
 
 
 def _bucket(platform):
@@ -172,6 +181,8 @@ def download_range(
 # channel = "C01" # is channel or band 01, There will be sixteen bands, 01-16
 # prefix = f"{product}/{year_doy_hour}/OR_{product}-{mode}{channel}_G{platform[-2:]}_s{start_search}"
 
+# https://noaa-goes16.s3.amazonaws.com/ABI-L2-MCMIPC/2019/132/00/
+# https://noaa-goes16.s3.amazonaws.com/ABI-L2-MCMIPC/2019/132/00/OR_ABI-L2-MCMIPC-M6_G16_s20191320051288_e20191320054060_c20191320054168.nc
 
 def search_s3(
     dt=None,
@@ -197,7 +208,8 @@ def search_s3(
     print(f"bucket, {_bucket(platform)}")
     results = [obj for page in page_iterator for obj in page.get("Contents", [])]
     print(f"Found {len(results)} results")
-    if channels:
+    # The level 2 products seem to not have Channel in filename
+    if channels and "ABI-L2" not in product:
         results = filter_results_by_channel(results, channels)
         print(f"Found {len(results)} results for channels {channels} ")
     return results
@@ -290,7 +302,7 @@ def warp_subset(
     outname="",
     bounds=None,
     # bounds=(-105, 30, -101, 33),
-    resolution=(1 / 600, 1 / 600),
+    resolution=(RES_1KM, RES_1KM),
     resampling="bilinear",
     dset="Rad",
 ):
@@ -390,33 +402,62 @@ def subset(
 def create_rgb(
     dt,
     bounds,
-    resolution=(1 / 600, 1 / 600),
+    # resolution=(1 / 600, 1 / 600),
+    resolution=(RES_1KM, RES_1KM),
     n=1,
     outdir="data",
-    gamma=0.7,
-    contrast=105,
+    gamma=1 / 2.2,
+    contrast=None,
     add_ir=False,
+    out_shape=None,
 ):
-    channels = [CHANNEL_R, CHANNEL_G, CHANNEL_B]
+    from skimage.transform import resize
+    channels = [CHANNEL_B, CHANNEL_R, CHANNEL_G]
     if add_ir:
         channels.append(CHANNEL_IR)
 
     file_paths, _ = download_nearest(
         dt,
         n=1,
-        channels=channels,
-        product=PRODUCT_L1_CONUS,
+        channels=None,
+        # product=PRODUCT_L1_CONUS,
+        product=PRODUCT_RGB_CONUS
+        ,
         outdir=outdir,
     )
-    R = warp_subset(file_paths[0], bounds=bounds, resolution=resolution)
-    G = warp_subset(file_paths[2], bounds=bounds, resolution=resolution)
-    B = warp_subset(file_paths[1], bounds=bounds, resolution=resolution)
-    if add_ir:
-        IR = warp_subset(file_paths[3], bounds=bounds, resolution=resolution)
-    return combine_rgb(R, G, B, gamma=gamma, contrast=contrast, add_ir=add_ir)
+    print(f"{file_paths = }")
+    B = warp_subset(file_paths[0], bounds=bounds, resolution=resolution, dset=L2_DSET_BLUE)
+    R = warp_subset(file_paths[0], bounds=bounds, resolution=resolution, dset=L2_DSET_RED)
+    G = warp_subset(file_paths[0], bounds=bounds, resolution=resolution, dset=L2_DSET_GREEN)
+    if out_shape is not None:
+        R = resize(R, out_shape)
+        G = resize(G, out_shape)
+        B = resize(B, out_shape)
+
+    is_night = False
+    nunique = len(np.unique(R))
+    if nunique < 5:
+        print(f"WARNING: R has {nunique} values. {dt} may be at night")
+        is_night = True
+
+    IR = (
+        warp_subset(file_paths[0], bounds=bounds, resolution=resolution, dset=L2_DSET_IR)
+        if add_ir
+        else None
+    )
+    if out_shape is not None:
+        IR = resize(IR, out_shape)
+    if is_night:
+        # Set all 3 to IR channel
+        print(IR.max(), IR.min())
+        cleanIR = _prep_ir(IR)
+        print(cleanIR.max(), cleanIR.min())
+        return np.dstack([cleanIR, cleanIR, cleanIR])
+
+    return combine_rgb(R, G, B, gamma=gamma, contrast=contrast, IR=IR)
 
 
-def combine_rgb(R, G, B, gamma=1 / 2.2, contrast=105, ir=None):
+def combine_rgb(R, G, B, gamma=1 / 2.2, contrast=None, IR=None, stretch_max=True):
     """Combine the Red, "Veggie" (G), and Blue bands to make true-color image
 
     These are bands 1, 3, 2 of the ABI imager for R, G, B
@@ -427,29 +468,47 @@ def combine_rgb(R, G, B, gamma=1 / 2.2, contrast=105, ir=None):
     tutorial:
     https://unidata.github.io/python-gallery/examples/mapping_GOES16_TrueColor.html
     """
-    from skimage.exposure import rescale_intensity, adjust_gamma
-    from skimage.util import img_as_float
+    # from skimage.exposure import rescale_intensity, adjust_gamma
+    # from skimage.util import img_as_float
 
-    Rg = adjust_gamma(rescale_intensity(img_as_float(R)), gamma)
-    Gg = adjust_gamma(rescale_intensity(img_as_float(G)), gamma)
-    Bg = adjust_gamma(rescale_intensity(img_as_float(B)), gamma)
-    G_true = 0.45 * Rg + 0.1 * Gg + 0.45 * Bg
-
-    RGB_true = np.dstack([Rg, G_true, Bg])
-    RGB_contrast = contrast_correction(RGB_true, contrast=contrast)
-
-    if ir is not None:
-        return combine_ir(RGB_contrast, ir)
+    # Rg = adjust_gamma(rescale_intensity(img_as_float(R)), gamma)
+    # Gg = adjust_gamma(rescale_intensity(img_as_float(G)), gamma)
+    # Bg = adjust_gamma(rescale_intensity(img_as_float(B)), gamma)
+    print("Max, min of R, G, B")
+    print(R.max(), R.min())
+    print(G.max(), G.min())
+    print(B.max(), B.min())
+    if stretch_max:
+        m = np.max([R.max(), G.max(), B.max()]).astype(float)
     else:
-        return RGB_contrast
+        #   Int16 valid_range 0, 4095;
+        m = 4095
+    Rg = np.power(np.clip(R / m, 0, 1), gamma)
+    Gg = np.power(np.clip(G / m, 0, 1), gamma)
+    Bg = np.power(np.clip(B / m, 0, 1), gamma)
+
+    G_true = 0.45 * Rg + 0.1 * Gg + 0.45 * Bg
+    # G_true = Gg
+
+    RGB = np.dstack([Rg, G_true, Bg])
+    if contrast:
+        RGB = contrast_correction(RGB, contrast=contrast)
+
+    if IR is not None:
+        return combine_ir(RGB, _prep_ir(IR))
+    else:
+        return RGB
 
 
-def create_ir():
-    cleanIR = C["CMI_C13"].data
-
+def _prep_ir(IR, minval=None, maxval=None):
     # Normalize the channel between a range.
-    #       cleanIR = (cleanIR-minimumValue)/(maximumValue-minimumValue)
-    cleanIR = (cleanIR - 90) / (313 - 90)
+    # cleanIR = (cleanIR-minimumValue)/(maximumValue-minimumValue)
+    # cleanIR = (IR - 90) / (313 - 90)
+    if minval is None:
+        minval = IR.min()
+    if maxval is None:
+        maxval = IR.max()
+    cleanIR = (IR - minval) / (maxval - minval)
 
     # Apply range limits to make sure values are between 0 and 1
     cleanIR = np.clip(cleanIR, 0, 1)
@@ -460,9 +519,7 @@ def create_ir():
     # Lessen the brightness of the coldest clouds so they don't appear so bright
     # when we overlay it on the true color image.
     cleanIR = cleanIR / 1.4
-
-    # Yes, we still need 3 channels as RGB values. This will be a grey image.
-    RGB_cleanIR = np.dstack([cleanIR, cleanIR, cleanIR])
+    return cleanIR
 
 
 def contrast_correction(color, contrast=105):
@@ -486,15 +543,15 @@ def contrast_correction(color, contrast=105):
     return color
 
 
-def combine_ir(rgb, ir):
+def combine_ir(rgb, IR):
     """Add in clean IR to the contrast-corrected True Color image"""
-    if ir is None:
+    if IR is None:
         return rgb
 
     return np.dstack(
         [
-            np.maximum(rgb[:, :, 0], ir),
-            np.maximum(rgb[:, :, 1], ir),
-            np.maximum(rgb[:, :, 2], ir),
+            np.maximum(rgb[:, :, 0], IR),
+            np.maximum(rgb[:, :, 1], IR),
+            np.maximum(rgb[:, :, 2], IR),
         ]
     )

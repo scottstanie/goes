@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import utils
+from . import utils
 
 
 def plot_series(file_paths, bounds, cmap="RdBu_r", dsets=["CMI"], title_format="time"):
